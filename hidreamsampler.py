@@ -15,7 +15,6 @@ import comfy.model_management  # Ensure this is imported
 import comfy.utils
 import gc
 import importlib.util
-from safetensors.torch import load_file
 
 accelerate_spec = importlib.util.find_spec("accelerate")
 accelerate_available = accelerate_spec is not None
@@ -1617,7 +1616,6 @@ class HiDreamImg2Img:
     def preprocess_image(self, image, target_height=None, target_width=None):
         """Resize and possibly crop input image to match model requirements."""
         import torch.nn.functional as F
-        import math
 
         # Get original dimensions
         _, orig_h, orig_w, _ = image.shape
