@@ -14,39 +14,29 @@ from PIL import Image
 import comfy.model_management  # Ensure this is imported
 import comfy.utils
 import gc
-import os  # For checking paths if needed
-import huggingface_hub
 import importlib.util
 from safetensors.torch import load_file
 
-# --- Optional Dependency Handling ---
-try:
-    import accelerate
-
-    accelerate_available = True
-except ImportError:
-    accelerate_available = False
+accelerate_spec = importlib.util.find_spec("accelerate")
+accelerate_available = accelerate_spec is not None
+if not accelerate_available:
     print(
         "Warning: accelerate not installed. device_map='auto' for GPTQ models may not work optimally."
     )
-try:
-    import gptqmodel
 
-    gptqmodel_available = True
-except ImportError:
-    gptqmodel_available = False
+gptqmodel_spec = importlib.util.find_spec("gptqmodel")
+gptqmodel_available = gptqmodel_spec is not None
+if not gptqmodel_available:
     print("Warning: GPTQModel not installed.")
     # Note: Optimum might still load GPTQ without GPTQModel if using ExLlama kernels,
     # but it's often required. Add a warning if NF4 models are selected later.^
-try:
-    import optimum
-
-    optimum_available = True
+optimum_spec = importlib.util.find_spec("optimum")
+optimum_available = optimum_spec is not None
+if optimum_available:
     print(
         "Optimum library found. GPTQ model loading enabled (requires suitable backend)."
     )
-except ImportError:
-    optimum_available = False
+else:
     print(
         "Warning: optimum not installed. GPTQ models (NF4 variants) will be disabled."
     )
