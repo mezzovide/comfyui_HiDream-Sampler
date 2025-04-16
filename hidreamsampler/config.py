@@ -173,6 +173,16 @@ MODEL_CONFIGS = {
     },
 }
 
+RESOLUTION_OPTIONS = [
+    "1024 × 1024 (Square)",
+    "768 × 1360 (Portrait)",
+    "1360 × 768 (Landscape)",
+    "880 × 1168 (Portrait)",
+    "1168 × 880 (Landscape)",
+    "1248 × 832 (Landscape)",
+    "832 × 1248 (Portrait)",
+]
+
 # --- Filter models based on available dependencies ---
 # (Keep filtering logic the same)
 original_model_count = len(MODEL_CONFIGS)

@@ -1,6 +1,6 @@
-from nodes.hidream_sampler import HiDreamSampler
-from nodes.hidream_img2img import HiDreamImg2Img
-from nodes.hidream_sampler_advanced import HiDreamSamplerAdvanced
+from .nodes.hidream_sampler import HiDreamSampler
+from .nodes.hidream_img2img import HiDreamImg2Img
+from .nodes.hidream_sampler_advanced import HiDreamSamplerAdvanced
 from .config import MODEL_CONFIGS
 import logging
 

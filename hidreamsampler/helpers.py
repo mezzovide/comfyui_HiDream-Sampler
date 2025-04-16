@@ -39,10 +39,10 @@ def global_cleanup():
         before_mem = torch.cuda.memory_allocated() / 1024**2
         print(f"  Memory before cleanup: {before_mem:.2f} MB")
 
-    # Perform HiDreamSampler cleanup
-    from .nodes import HiDreamSampler
+    # Perform HiDreamBase cleanup
+    from .nodes.hidream_base import HiDreamBase
 
-    HiDreamSampler.cleanup_models()
+    HiDreamBase.cleanup_models()
 
     # Additional cleanup
     gc.collect()
@@ -97,17 +97,17 @@ def load_models(model_type, use_uncensored_llm=False):
     print(f"(Start VRAM: {start_mem:.2f} MB)")
 
     # Create a standardized cache key used by all nodes
-    from .nodes import HiDreamSampler
+    from .nodes.hidream_base import HiDreamBase
 
     cache_key = f"{model_type}_{'uncensored' if use_uncensored_llm else 'standard'}"
 
     # Check cache with debug info
     if DEBUG_CACHE:
         print(f"Cache check for key: {cache_key}")
-        print(f"Cache contains: {list(HiDreamSampler._model_cache.keys())}")
+        print(f"Cache contains: {list(HiDreamBase._model_cache.keys())}")
 
-    if cache_key in HiDreamSampler._model_cache:
-        pipe, stored_config = HiDreamSampler._model_cache[cache_key]
+    if cache_key in HiDreamBase._model_cache:
+        pipe, stored_config = HiDreamBase._model_cache[cache_key]
         if (
             pipe is not None
             and hasattr(pipe, "transformer")
@@ -118,7 +118,7 @@ def load_models(model_type, use_uncensored_llm=False):
         else:
             print(f"Cache entry invalid for {cache_key}, reloading")
             # Remove from cache to avoid reusing
-            HiDreamSampler._model_cache.pop(cache_key, None)
+            HiDreamBase._model_cache.pop(cache_key, None)
 
     # --- 1. Load LLM (Conditional) ---
     text_encoder_load_kwargs = {"low_cpu_mem_usage": True, "torch_dtype": model_dtype}
@@ -271,15 +271,6 @@ def load_models(model_type, use_uncensored_llm=False):
 
 
 # --- Resolution Parsing & Tensor Conversion ---
-RESOLUTION_OPTIONS = [
-    "1024 × 1024 (Square)",
-    "768 × 1360 (Portrait)",
-    "1360 × 768 (Landscape)",
-    "880 × 1168 (Portrait)",
-    "1168 × 880 (Landscape)",
-    "1248 × 832 (Landscape)",
-    "832 × 1248 (Portrait)",
-]
 
 
 def parse_resolution(resolution_str):
