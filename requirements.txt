@@ -15,9 +15,11 @@ bitsandbytes>=0.41.0
 optimum>=1.12.0
 accelerate>=0.25.0
 sageattention
-gptqmodel>=2.0.0 # Add this based on user feedback
 
-triton==3.0.0 # Higher versions seem to crash for some Windows users
+# Add this based on user feedback
+gptqmodel>=2.0.0
 
+triton>=3.0.0,<3.1.0; sys_platform != "win32"
+triton-windows==3.3.0a0.post17; sys_platform == "win32"
 
     
