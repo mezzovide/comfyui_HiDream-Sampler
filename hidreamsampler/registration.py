@@ -4,7 +4,7 @@ from .nodes.hidream_sampler_advanced import HiDreamSamplerAdvanced
 from .config import MODEL_CONFIGS
 import logging
 
-logger = logging.getLogger("hidreamsampler")
+logger = logging.getLogger(__name__)
 
 NODE_CLASS_MAPPINGS = {
     "HiDreamSampler": HiDreamSampler,

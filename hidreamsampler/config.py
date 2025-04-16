@@ -10,34 +10,32 @@
 # - Ensure hi_diffusers library is locally available or hdi1 package is installed.
 
 import torch
-import numpy as np
-from PIL import Image
-import comfy.model_management  # Ensure this is imported
-import comfy.utils
-import gc
 import importlib.util
+import logging
+
+logger = logging.getLogger(__name__)
 
 accelerate_spec = importlib.util.find_spec("accelerate")
 accelerate_available = accelerate_spec is not None
 if not accelerate_available:
-    print(
+    logger.warning(
         "Warning: accelerate not installed. device_map='auto' for GPTQ models may not work optimally."
     )
 
 gptqmodel_spec = importlib.util.find_spec("gptqmodel")
 gptqmodel_available = gptqmodel_spec is not None
 if not gptqmodel_available:
-    print("Warning: GPTQModel not installed.")
+    logger.warning("Warning: GPTQModel not installed.")
     # Note: Optimum might still load GPTQ without GPTQModel if using ExLlama kernels,
     # but it's often required. Add a warning if NF4 models are selected later.^
 optimum_spec = importlib.util.find_spec("optimum")
 optimum_available = optimum_spec is not None
 if optimum_available:
-    print(
+    logger.info(
         "Optimum library found. GPTQ model loading enabled (requires suitable backend)."
     )
 else:
-    print(
+    logger.warning(
         "Warning: optimum not installed. GPTQ models (NF4 variants) will be disabled."
     )
 
@@ -52,17 +50,18 @@ except ImportError:
     # Keep placeholders None to avoid errors later if bnb not available
     TransformersBitsAndBytesConfig = None
     DiffusersBitsAndBytesConfig = None
-    print(
+    logger.warning(
         "Warning: bitsandbytes not installed. 4-bit BNB quantization will not be available."
     )
-
-# --- Core Imports ---
-from transformers import LlamaForCausalLM, AutoTokenizer  # Use AutoTokenizer
 
 # --- HiDream Specific Imports ---
 # Attempt local import first, then fallback (which might fail)
 try:
     # Assuming hi_diffusers is cloned into this custom_node's directory
+    from ..hi_diffusers.schedulers.fm_solvers_unipc import FlowUniPCMultistepScheduler
+    from ..hi_diffusers.schedulers.flash_flow_match import (
+        FlashFlowMatchEulerDiscreteScheduler,
+    )
     from ..hi_diffusers.models.transformers.transformer_hidream_image import (
         HiDreamImageTransformer2DModel,
     )
@@ -72,19 +71,17 @@ try:
     from ..hi_diffusers.pipelines.hidream_image.pipeline_hidream_image_to_image import (
         HiDreamImageToImagePipeline,
     )
-    from ..hi_diffusers.schedulers.fm_solvers_unipc import FlowUniPCMultistepScheduler
-    from ..hi_diffusers.schedulers.flash_flow_match import (
-        FlashFlowMatchEulerDiscreteScheduler,
-    )
 
     hidream_classes_loaded = True
 except ImportError as e:
-    print("--------------------------------------------------------------------")
-    print(f"ComfyUI-HiDream-Sampler: Could not import local hi_diffusers ({e}).")
-    print("Please ensure hi_diffusers library is inside ComfyUI-HiDream-Sampler,")
-    print("or hdi1 package is installed in the ComfyUI environment.")
-    print("Node may fail to load models.")
-    print("--------------------------------------------------------------------")
+    logger.error("--------------------------------------------------------------------")
+    logger.error(f"ComfyUI-HiDream-Sampler: Could not import local hi_diffusers ({e}).")
+    logger.error(
+        "Please ensure hi_diffusers library is inside ComfyUI-HiDream-Sampler,"
+    )
+    logger.error("or hdi1 package is installed in the ComfyUI environment.")
+    logger.error("Node may fail to load models.")
+    logger.error("--------------------------------------------------------------------")
     # Define placeholders so the script doesn't crash immediately
     HiDreamImageTransformer2DModel = None
     HiDreamImagePipeline = None
@@ -184,7 +181,6 @@ RESOLUTION_OPTIONS = [
 ]
 
 # --- Filter models based on available dependencies ---
-# (Keep filtering logic the same)
 original_model_count = len(MODEL_CONFIGS)
 if not bnb_available:
     MODEL_CONFIGS = {
@@ -198,19 +194,22 @@ if not hidream_classes_loaded:
     MODEL_CONFIGS = {}
 filtered_model_count = len(MODEL_CONFIGS)
 if filtered_model_count == 0:
-    print("*" * 70 + "\nCRITICAL ERROR: No HiDream models available...\n" + "*" * 70)
+    logger.error(
+        "*" * 70 + "\nCRITICAL ERROR: No HiDream models available...\n" + "*" * 70
+    )
 elif filtered_model_count < original_model_count:
-    print("*" * 70 + "\nWarning: Some HiDream models disabled...\n" + "*" * 70)
+    logger.warning("*" * 70 + "\nWarning: Some HiDream models disabled...\n" + "*" * 70)
+
 # Define BitsAndBytes configs (if available)
-# (Keep definitions the same)
 bnb_llm_config = None
 bnb_transformer_4bit_config = None
 if bnb_available:
     bnb_llm_config = TransformersBitsAndBytesConfig(load_in_4bit=True)
     bnb_transformer_4bit_config = DiffusersBitsAndBytesConfig(load_in_4bit=True)
+
 model_dtype = torch.bfloat16
+
 # Get available scheduler classes
-# (Keep definitions the same)
 available_schedulers = {}
 if hidream_classes_loaded:
     available_schedulers = {

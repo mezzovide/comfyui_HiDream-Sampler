@@ -1,20 +1,21 @@
 from ..config import (
     MODEL_CONFIGS,
-    RESOLUTION_OPTIONS,
 )
 from ..helpers import (
-    global_cleanup,
     get_scheduler_instance,
     load_models,
-    parse_resolution,
     pil2tensor,
 )
 import torch
-from PIL import Image
 import gc
 import comfy.utils
+import logging
 
 from .hidream_base import HiDreamBase
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 class HiDreamImg2Img(HiDreamBase):
@@ -110,7 +111,7 @@ class HiDreamImg2Img(HiDreamBase):
         _, orig_h, orig_w, _ = image.shape
         orig_aspect = orig_w / orig_h
 
-        print(
+        logger.info(
             f"Original image dimensions: {orig_w}x{orig_h}, aspect ratio: {orig_aspect:.3f}"
         )
 
@@ -138,7 +139,7 @@ class HiDreamImg2Img(HiDreamBase):
                     best_diff = diff
                     target_width, target_height = w, h
 
-            print(f"Selected target resolution: {target_width}x{target_height}")
+            logger.info(f"Selected target resolution: {target_width}x{target_height}")
 
         # Ensure dimensions are divisible by 16
         target_width = (target_width // 16) * 16
@@ -192,7 +193,7 @@ class HiDreamImg2Img(HiDreamBase):
             x_offset : x_offset + width_to_copy,
         ]
 
-        print(f"Processed to: {target_width}x{target_height} (divisible by 16)")
+        logger.info(f"Processed to: {target_width}x{target_height} (divisible by 16)")
 
         # Convert back to ComfyUI format [B,H,W,C]
         return x_result.permute(0, 2, 3, 1)
@@ -225,10 +226,10 @@ class HiDreamImg2Img(HiDreamBase):
         # Monitor initial memory usage
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
-            print(f"HiDream: Initial VRAM usage: {initial_mem:.2f} MB")
+            logger.info(f"HiDream: Initial VRAM usage: {initial_mem:.2f} MB")
 
         if not MODEL_CONFIGS or model_type == "error":
-            print("HiDream Error: No models loaded.")
+            logger.error("HiDream Error: No models loaded.")
             return (torch.zeros((1, 512, 512, 3)),)
 
         pipe = None
@@ -241,7 +242,7 @@ class HiDreamImg2Img(HiDreamBase):
 
         # Try to reuse from cache first
         if cache_key in self._model_cache:
-            print(f"Checking cache for {cache_key}...")
+            logger.info(f"Checking cache for {cache_key}...")
             pipe, config = self._model_cache[cache_key]
             valid_cache = True
             if (
@@ -251,18 +252,18 @@ class HiDreamImg2Img(HiDreamBase):
                 or pipe.transformer is None
             ):
                 valid_cache = False
-                print("Invalid cache, reloading...")
+                logger.warning("Invalid cache, reloading...")
                 del self._model_cache[cache_key]
                 pipe, config = None, None
             if valid_cache:
-                print("Using cached model.")
+                logger.info("Using cached model.")
 
         if pipe is None:
             if self._model_cache:
-                print(f"Clearing img2img cache before loading {model_type}...")
+                logger.info(f"Clearing img2img cache before loading {model_type}...")
                 keys_to_del = list(self._model_cache.keys())
                 for key in keys_to_del:
-                    print(f"  Removing '{key}'...")
+                    logger.info(f"  Removing '{key}'...")
                     try:
                         pipe_to_del, _ = self._model_cache.pop(key)
                         # More aggressive cleanup
@@ -276,7 +277,7 @@ class HiDreamImg2Img(HiDreamBase):
                             pipe_to_del.scheduler = None
                         del pipe_to_del
                     except Exception as e:
-                        print(f"  Error removing {key}: {e}")
+                        logger.error(f"  Error removing {key}: {e}")
 
                 # Multiple garbage collection passes
                 for _ in range(3):
@@ -285,16 +286,16 @@ class HiDreamImg2Img(HiDreamBase):
                     torch.cuda.empty_cache()
                     # Force synchronization
                     torch.cuda.synchronize()
-                print("Cache cleared.")
+                logger.info("Cache cleared.")
 
-            print(f"Loading model for {model_type} img2img...")
+            logger.info(f"Loading model for {model_type} img2img...")
 
             try:
                 # First load regular model
                 txt2img_pipe, config = load_models(model_type, use_uncensored_llm)
 
                 # Convert to img2img pipeline
-                print("Creating img2img pipeline from loaded txt2img pipeline...")
+                logger.info("Creating img2img pipeline from loaded txt2img pipeline...")
                 from hi_diffusers.pipelines.hidream_image.pipeline_hidream_image_to_image import (
                     HiDreamImageToImagePipeline,
                 )
@@ -320,24 +321,24 @@ class HiDreamImg2Img(HiDreamBase):
 
                 # Cache the img2img pipeline
                 self._model_cache[cache_key] = (pipe, config)
-                print(f"Model {model_type} loaded & cached for img2img!")
+                logger.info(f"Model {model_type} loaded & cached for img2img!")
 
             except Exception as e:
-                print(f"!!! ERROR loading {model_type}: {e}")
+                logger.error(f"!!! ERROR loading {model_type}: {e}")
                 import traceback
 
                 traceback.print_exc()
                 return (torch.zeros((1, 512, 512, 3)),)
 
         if pipe is None or config is None:
-            print("CRITICAL ERROR: Load failed.")
+            logger.critical("CRITICAL ERROR: Load failed.")
             return (torch.zeros((1, 512, 512, 3)),)
 
         # Update scheduler if requested
         original_scheduler_class = config["scheduler_class"]
         original_shift = config["shift"]
         if scheduler != "Default for model":
-            print(
+            logger.info(
                 f"Replacing default scheduler ({original_scheduler_class}) with: {scheduler}"
             )
             # Create a completely fresh scheduler instance to avoid any parameter leakage
@@ -367,7 +368,7 @@ class HiDreamImg2Img(HiDreamBase):
                 pipe.scheduler = new_scheduler
         else:
             # Ensure we're using the original scheduler as specified in the model config
-            print(f"Using model's default scheduler: {original_scheduler_class}")
+            logger.info(f"Using model's default scheduler: {original_scheduler_class}")
             pipe.scheduler = get_scheduler_instance(
                 original_scheduler_class, original_shift
             )
@@ -397,14 +398,14 @@ class HiDreamImg2Img(HiDreamBase):
                 "cuda" if torch.cuda.is_available() else "cpu"
             )
 
-        print(f"Creating Generator on: {inference_device}")
+        logger.info(f"Creating Generator on: {inference_device}")
         generator = torch.Generator(device=inference_device).manual_seed(seed)
-        print("\n--- Starting Img2Img Generation ---")
+        logger.info("\n--- Starting Img2Img Generation ---")
         _, h, w, _ = image.shape
-        print(
+        logger.info(
             f"Model: {model_type}{' (uncensored)' if use_uncensored_llm else ''}, Input Size: {h}x{w}"
         )
-        print(
+        logger.info(
             f"Denoising: {denoising_strength}, Steps: {num_inference_steps}, CFG: {guidance_scale}, Seed: {seed}"
         )
 
@@ -412,12 +413,16 @@ class HiDreamImg2Img(HiDreamBase):
         output_images = None
         try:
             if not is_nf4_current:
-                print(f"Ensuring pipe on: {inference_device} (Offload NOT enabled)")
+                logger.info(
+                    f"Ensuring pipe on: {inference_device} (Offload NOT enabled)"
+                )
                 pipe.to(inference_device)
             else:
-                print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
+                logger.info(
+                    f"Skipping pipe.to({inference_device}) (CPU offload enabled)."
+                )
 
-            print("Executing pipeline inference...")
+            logger.info("Executing pipeline inference...")
 
             with torch.inference_mode():
                 output_images = pipe(
@@ -443,34 +448,36 @@ class HiDreamImg2Img(HiDreamBase):
                     callback_on_step_end_tensor_inputs=["latents"],
                 ).images
 
-            print("Pipeline inference finished.")
+            logger.info("Pipeline inference finished.")
 
         except Exception as e:
-            print(f"!!! ERROR during execution: {e}")
+            logger.error(f"!!! ERROR during execution: {e}")
             import traceback
 
             traceback.print_exc()
             return (torch.zeros((1, h, w, 3)),)
         finally:
             pbar.update_absolute(num_inference_steps)  # Update pbar regardless
-        print("--- Generation Complete ---")
+        logger.info("--- Generation Complete ---")
 
         # Robust output handling
         if output_images is None or len(output_images) == 0:
-            print("ERROR: No images returned. Creating blank image.")
+            logger.error("ERROR: No images returned. Creating blank image.")
             return (torch.zeros((1, h, w, 3)),)
 
         try:
-            print(f"Processing output image. Type: {type(output_images[0])}")
+            logger.info(f"Processing output image. Type: {type(output_images[0])}")
             output_tensor = pil2tensor(output_images[0])
 
             if output_tensor is None:
-                print("ERROR: pil2tensor returned None. Creating blank image.")
+                logger.error("ERROR: pil2tensor returned None. Creating blank image.")
                 return (torch.zeros((1, h, w, 3)),)
 
             # Fix for bfloat16 tensor issue
             if output_tensor.dtype == torch.bfloat16:
-                print("Converting bfloat16 tensor to float32 for ComfyUI compatibility")
+                logger.info(
+                    "Converting bfloat16 tensor to float32 for ComfyUI compatibility"
+                )
                 output_tensor = output_tensor.to(torch.float32)
 
             # Verify tensor shape is valid
@@ -479,33 +486,33 @@ class HiDreamImg2Img(HiDreamBase):
                 or output_tensor.shape[0] != 1
                 or output_tensor.shape[3] != 3
             ):
-                print(
+                logger.error(
                     f"ERROR: Invalid tensor shape {output_tensor.shape}. Creating blank image."
                 )
                 return (torch.zeros((1, h, w, 3)),)
 
-            print(f"Output tensor shape: {output_tensor.shape}")
+            logger.info(f"Output tensor shape: {output_tensor.shape}")
 
             # After generating the image, try to clean up any temporary memory
             try:
                 import comfy.model_management as model_management
 
-                print("HiDream: Requesting ComfyUI memory cleanup...")
+                logger.info("HiDream: Requesting ComfyUI memory cleanup...")
                 model_management.soft_empty_cache()
             except Exception as e:
-                print(f"HiDream: ComfyUI cleanup failed: {e}")
+                logger.warning(f"HiDream: ComfyUI cleanup failed: {e}")
 
             # Log final memory usage
             if torch.cuda.is_available():
                 final_mem = torch.cuda.memory_allocated() / 1024**2
-                print(
+                logger.info(
                     f"HiDream: Final VRAM usage: {final_mem:.2f} MB (Change: {final_mem - initial_mem:.2f} MB)"
                 )
 
             return (output_tensor,)
 
         except Exception as e:
-            print(f"Error processing output image: {e}")
+            logger.error(f"Error processing output image: {e}")
             import traceback
 
             traceback.print_exc()

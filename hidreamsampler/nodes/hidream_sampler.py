@@ -3,19 +3,19 @@ from ..config import (
     RESOLUTION_OPTIONS,
 )
 from ..helpers import (
-    global_cleanup,
-    get_scheduler_instance,
     load_models,
     parse_resolution,
     pil2tensor,
 )
 import torch
 from PIL import Image
-import gc
 import comfy.utils
-
+import logging
 
 from .hidream_base import HiDreamBase
+
+# Set up logger for this module
+logger = logging.getLogger(__name__)
 
 
 # --- ComfyUI Node Definition ---
@@ -36,7 +36,7 @@ class HiDreamSampler(HiDreamBase):
             width, height = dims_part.split("×")
             return int(width), int(height)
         except Exception as e:
-            print(
+            logger.error(
                 f"Error parsing aspect ratio '{aspect_ratio_str}': {e}. Falling back to 1024x1024."
             )
             return 1024, 1024
@@ -121,16 +121,16 @@ class HiDreamSampler(HiDreamBase):
         # Determine resolution
         if override_width > 0 and override_height > 0:
             height, width = override_height, override_width
-            print(f"Using override resolution: {width}x{height}")
+            logger.info(f"Using override resolution: {width}x{height}")
         else:
             height, width = parse_resolution(resolution)
-            print(f"Using fixed resolution: {width}x{height} ({resolution})")
+            logger.info(f"Using fixed resolution: {width}x{height} ({resolution})")
 
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
-            print(f"HiDream: Initial VRAM usage: {initial_mem:.2f} MB")
+            logger.info(f"HiDream: Initial VRAM usage: {initial_mem:.2f} MB")
         if not MODEL_CONFIGS or model_type == "error":
-            print("HiDream Error: No models loaded.")
+            logger.error("HiDream Error: No models loaded.")
             return (torch.zeros((1, 512, 512, 3)),)
 
         cache_key = f"{model_type}"
@@ -138,22 +138,22 @@ class HiDreamSampler(HiDreamBase):
 
         if pipe is None:
             self.clear_model_cache(self._model_cache)
-            print(f"Loading model for {model_type}...")
+            logger.info(f"Loading model for {model_type}...")
             try:
                 pipe, config = load_models(model_type, use_uncensored_llm)
                 self._model_cache[cache_key] = (pipe, config)
-                print(
+                logger.info(
                     f"Model {model_type}{' (uncensored)' if use_uncensored_llm else ''} loaded & cached!"
                 )
             except Exception as e:
-                print(f"!!! ERROR loading {model_type}: {e}")
+                logger.error(f"!!! ERROR loading {model_type}: {e}")
                 import traceback
 
-                traceback.print_exc()
+                logger.error(traceback.format_exc())
                 return (torch.zeros((1, 512, 512, 3)),)
 
         if pipe is None or config is None:
-            print("CRITICAL ERROR: Load failed.")
+            logger.critical("CRITICAL ERROR: Load failed.")
             return (torch.zeros((1, 512, 512, 3)),)
 
         original_scheduler_class = config["scheduler_class"]
@@ -189,30 +189,36 @@ class HiDreamSampler(HiDreamBase):
                 "cuda" if torch.cuda.is_available() else "cpu"
             )
 
-        print(f"Creating Generator on: {inference_device}")
+        logger.info(f"Creating Generator on: {inference_device}")
         generator = torch.Generator(device=inference_device).manual_seed(seed)
-        print("\n--- Starting Generation ---")
-        print(
+        logger.info("\n--- Starting Generation ---")
+        logger.info(
             f"Model: {model_type}, Res: {height}x{width}, Steps: {num_inference_steps}, CFG: {guidance_scale}, Seed: {seed}"
         )
-        print(
+        logger.info(
             f"Using standard sequence lengths: CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}"
         )
 
         pipeline_output = None
         try:
             if not is_nf4_current:
-                print(f"Ensuring pipe on: {inference_device} (Offload NOT enabled)")
+                logger.info(
+                    f"Ensuring pipe on: {inference_device} (Offload NOT enabled)"
+                )
                 pipe.to(inference_device)
             else:
-                print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
-            print("Executing pipeline inference...")
+                logger.info(
+                    f"Skipping pipe.to({inference_device}) (CPU offload enabled)."
+                )
+            logger.info("Executing pipeline inference...")
 
             if num_images > 1:
-                print(f"Preparing for batch generation with {num_images} images...")
+                logger.info(
+                    f"Preparing for batch generation with {num_images} images..."
+                )
                 output_images_list = []
                 for i in range(num_images):
-                    print(f"Generating image {i + 1}/{num_images}...")
+                    logger.info(f"Generating image {i + 1}/{num_images}...")
                     with torch.inference_mode():
                         single_output = pipe(
                             prompt=prompt,
@@ -268,17 +274,17 @@ class HiDreamSampler(HiDreamBase):
                     )
                     output_images_list = pipeline_output.images
 
-            print("Pipeline inference finished.")
+            logger.info("Pipeline inference finished.")
 
         except Exception as e:
-            print(f"!!! ERROR during execution: {e}")
+            logger.error(f"!!! ERROR during execution: {e}")
             import traceback
 
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             return (torch.zeros((1, height, width, 3)),)
         finally:
             pbar.update_absolute(num_inference_steps)
-        print("--- Generation Complete ---")
+        logger.info("--- Generation Complete ---")
 
         # Use base class output processing for the first image (batching can be improved in future)
         if (
@@ -286,41 +292,45 @@ class HiDreamSampler(HiDreamBase):
             or not isinstance(output_images_list, list)
             or len(output_images_list) == 0
         ):
-            print(
+            logger.error(
                 f"ERROR: No images returned or invalid format (Type: {type(output_images_list)}). Creating blank image."
             )
             return (torch.zeros((1, height, width, 3)),)
 
         # For batch, stack tensors
         try:
-            print(f"Processing {len(output_images_list)} output image(s).")
+            logger.info(f"Processing {len(output_images_list)} output image(s).")
             tensor_list = []
             for i, img in enumerate(output_images_list):
                 if not isinstance(img, Image.Image):
-                    print(
+                    logger.warning(
                         f"WARNING: Item {i} in output list is not a PIL Image (Type: {type(img)}). Skipping."
                     )
                     continue
-                print(f"Converting image {i + 1}/{len(output_images_list)}...")
+                logger.info(f"Converting image {i + 1}/{len(output_images_list)}...")
                 single_tensor = pil2tensor(img)
                 if single_tensor is not None:
                     if len(single_tensor.shape) == 4 and single_tensor.shape[0] == 1:
                         tensor_list.append(single_tensor)
                     else:
-                        print(
+                        logger.warning(
                             f"WARNING: pil2tensor returned unexpected shape {single_tensor.shape} for image {i}. Skipping."
                         )
                 else:
-                    print(f"WARNING: pil2tensor failed for image {i}. Skipping.")
+                    logger.warning(
+                        f"WARNING: pil2tensor failed for image {i}. Skipping."
+                    )
             if not tensor_list:
-                print("ERROR: All image conversions failed. Creating blank image.")
+                logger.error(
+                    "ERROR: All image conversions failed. Creating blank image."
+                )
                 return (torch.zeros((1, height, width, 3)),)
             output_tensor = torch.cat(tensor_list, dim=0)
-            print(
+            logger.info(
                 f"Successfully converted {output_tensor.shape[0]} images into batch tensor."
             )
             if output_tensor.dtype != torch.float32:
-                print(
+                logger.info(
                     f"Converting batched {output_tensor.dtype} tensor to float32 for ComfyUI compatibility"
                 )
                 output_tensor = output_tensor.to(torch.float32)
@@ -329,27 +339,27 @@ class HiDreamSampler(HiDreamBase):
                 or output_tensor.shape[0] == 0
                 or output_tensor.shape[3] != 3
             ):
-                print(
+                logger.error(
                     f"ERROR: Invalid final batch tensor shape {output_tensor.shape}. Creating blank image."
                 )
                 return (torch.zeros((1, height, width, 3)),)
-            print(f"Output tensor shape: {output_tensor.shape}")
+            logger.info(f"Output tensor shape: {output_tensor.shape}")
             try:
                 import comfy.model_management as model_management
 
-                print("HiDream: Requesting ComfyUI memory cleanup...")
+                logger.info("HiDream: Requesting ComfyUI memory cleanup...")
                 model_management.soft_empty_cache()
             except Exception as e:
-                print(f"HiDream: ComfyUI cleanup failed: {e}")
+                logger.warning(f"HiDream: ComfyUI cleanup failed: {e}")
             if torch.cuda.is_available():
                 final_mem = torch.cuda.memory_allocated() / 1024**2
-                print(
+                logger.info(
                     f"HiDream: Final VRAM usage: {final_mem:.2f} MB (Change: {final_mem - initial_mem:.2f} MB)"
                 )
             return (output_tensor,)
         except Exception as e:
-            print(f"Error processing output image: {e}")
+            logger.error(f"Error processing output image: {e}")
             import traceback
 
-            traceback.print_exc()
+            logger.error(traceback.format_exc())
             return (torch.zeros((1, height, width, 3)),)

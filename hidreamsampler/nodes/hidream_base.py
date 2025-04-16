@@ -1,14 +1,13 @@
+import logging
+
+# Set up logging for this module
+logger = logging.getLogger(__name__)
+
 import torch
 import gc
-from PIL import Image
-import comfy.utils
-
-from ..config import MODEL_CONFIGS
 from ..helpers import (
     get_scheduler_instance,
-    load_models,
     pil2tensor,
-    parse_resolution,
 )
 
 
@@ -17,10 +16,10 @@ class HiDreamBase:
 
     @classmethod
     def cleanup_models(cls):
-        print("HiDream: Cleaning up all cached models...")
+        logger.info("HiDream: Cleaning up all cached models...")
         keys_to_del = list(cls._model_cache.keys())
         for key in keys_to_del:
-            print(f"  Removing '{key}'...")
+            logger.info("Removing '{}'...".format(key))
             try:
                 pipe_to_del, _ = cls._model_cache.pop(key)
                 if hasattr(pipe_to_del, "transformer"):
@@ -33,19 +32,19 @@ class HiDreamBase:
                     pipe_to_del.scheduler = None
                 del pipe_to_del
             except Exception as e:
-                print(f"  Error cleaning up {key}: {e}")
+                logger.error("Error cleaning up {}: {}".format(key, e))
         for _ in range(3):
             gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-        print("HiDream: Cache cleared")
+        logger.info("HiDream: Cache cleared")
         return True
 
     @staticmethod
     def get_model_from_cache(cache_key, model_cache):
         if cache_key in model_cache:
-            print(f"Checking cache for {cache_key}...")
+            logger.info("Checking cache for {}...".format(cache_key))
             pipe, config = model_cache[cache_key]
             valid_cache = True
             if (
@@ -55,21 +54,21 @@ class HiDreamBase:
                 or pipe.transformer is None
             ):
                 valid_cache = False
-                print("Invalid cache, reloading...")
+                logger.warning("Invalid cache, reloading...")
                 del model_cache[cache_key]
                 pipe, config = None, None
             if valid_cache:
-                print("Using cached model.")
+                logger.info("Using cached model.")
             return pipe, config
         return None, None
 
     @staticmethod
     def clear_model_cache(model_cache):
         if model_cache:
-            print(f"Clearing ALL cache before loading new model...")
+            logger.info("Clearing ALL cache before loading new model...")
             keys_to_del = list(model_cache.keys())
             for key in keys_to_del:
-                print(f"  Removing '{key}'...")
+                logger.info("Removing '{}'...".format(key))
                 try:
                     pipe_to_del, _ = model_cache.pop(key)
                     if hasattr(pipe_to_del, "transformer"):
@@ -82,21 +81,23 @@ class HiDreamBase:
                         pipe_to_del.scheduler = None
                     del pipe_to_del
                 except Exception as e:
-                    print(f"  Error removing {key}: {e}")
+                    logger.error("Error removing {}: {}".format(key, e))
             for _ in range(3):
                 gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
                 torch.cuda.synchronize()
-            print("Cache cleared.")
+            logger.info("Cache cleared.")
 
     @staticmethod
     def update_scheduler(
         pipe, config, scheduler, original_scheduler_class, original_shift
     ):
         if scheduler != "Default for model":
-            print(
-                f"Replacing default scheduler ({original_scheduler_class}) with: {scheduler}"
+            logger.info(
+                "Replacing default scheduler ({}) with: {}".format(
+                    original_scheduler_class, scheduler
+                )
             )
             if scheduler == "UniPC":
                 new_scheduler = get_scheduler_instance(
@@ -123,7 +124,9 @@ class HiDreamBase:
                     new_scheduler.use_exponential_sigmas = True
                 pipe.scheduler = new_scheduler
         else:
-            print(f"Using model's default scheduler: {original_scheduler_class}")
+            logger.info(
+                "Using model's default scheduler: {}".format(original_scheduler_class)
+            )
             pipe.scheduler = get_scheduler_instance(
                 original_scheduler_class, original_shift
             )
@@ -131,37 +134,43 @@ class HiDreamBase:
     @staticmethod
     def process_output_images(output_images, h, w):
         if output_images is None or len(output_images) == 0:
-            print("ERROR: No images returned. Creating blank image.")
+            logger.error("No images returned. Creating blank image.")
             return (torch.zeros((1, h, w, 3)),)
         try:
-            print(f"Processing output image. Type: {type(output_images[0])}")
+            logger.info(
+                "Processing output image. Type: {}".format(type(output_images[0]))
+            )
             output_tensor = pil2tensor(output_images[0])
             if output_tensor is None:
-                print("ERROR: pil2tensor returned None. Creating blank image.")
+                logger.error("pil2tensor returned None. Creating blank image.")
                 return (torch.zeros((1, h, w, 3)),)
             if output_tensor.dtype == torch.bfloat16:
-                print("Converting bfloat16 tensor to float32 for ComfyUI compatibility")
+                logger.info(
+                    "Converting bfloat16 tensor to float32 for ComfyUI compatibility"
+                )
                 output_tensor = output_tensor.to(torch.float32)
             if (
                 len(output_tensor.shape) != 4
                 or output_tensor.shape[0] != 1
                 or output_tensor.shape[3] != 3
             ):
-                print(
-                    f"ERROR: Invalid tensor shape {output_tensor.shape}. Creating blank image."
+                logger.error(
+                    "Invalid tensor shape {}. Creating blank image.".format(
+                        output_tensor.shape
+                    )
                 )
                 return (torch.zeros((1, h, w, 3)),)
-            print(f"Output tensor shape: {output_tensor.shape}")
+            logger.info("Output tensor shape: {}".format(output_tensor.shape))
             try:
                 import comfy.model_management as model_management
 
-                print("HiDream: Requesting ComfyUI memory cleanup...")
+                logger.info("HiDream: Requesting ComfyUI memory cleanup...")
                 model_management.soft_empty_cache()
             except Exception as e:
-                print(f"HiDream: ComfyUI cleanup failed: {e}")
+                logger.warning("HiDream: ComfyUI cleanup failed: {}".format(e))
             return (output_tensor,)
         except Exception as e:
-            print(f"Error processing output image: {e}")
+            logger.error("Error processing output image: {}".format(e))
             import traceback
 
             traceback.print_exc()
