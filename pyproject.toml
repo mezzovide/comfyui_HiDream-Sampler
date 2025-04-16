@@ -1,10 +1,29 @@
 [project]
 
-name = "hidream-sampler"
+dependencies = [
+  "# Core dependencies",
+  "transformers>=4.36.0",
+  "diffusers>=0.26.0",
+  "torch>=2.0.0",
+  "numpy>=1.24.0",
+  "Pillow>=10.0.0",
+  "# For standard (BNB) models",
+  "bitsandbytes>=0.41.0",
+  "# For NF4 models",
+  "optimum>=1.12.0",
+  "accelerate>=0.25.0",
+  "gptqmodel>=2.2.0",
+  "# gptqmodel might need some more dependencies",
+  "device-smi",
+  "tokenicer",
+  "threadpoolctl",
+  "logbar",
+  "datasets",
+]
 description = "A custom ComfyUI node for generating images using the HiDream AI model. Uses quantization for lower memory usage. Simple, Advanced and Img2img mode."
-version = "1.2.0"
 license = {file = "LICENSE"}
-dependencies = ["# Core dependencies", "transformers>=4.36.0", "diffusers>=0.26.0", "torch>=2.0.0", "numpy>=1.24.0", "Pillow>=10.0.0", "# For standard (BNB) models", "bitsandbytes>=0.41.0", "# For NF4 models", "optimum>=1.12.0", "accelerate>=0.25.0", "gptqmodel>=2.2.0", "# gptqmodel might need some more dependencies", "device-smi", "tokenicer", "threadpoolctl", "logbar", "datasets"]
+name = "hidream-sampler"
+version = "1.2.0"
 
 [project.urls]
 Repository = "https://github.com/lum3on/comfyui_HiDream-Sampler"
@@ -12,6 +31,6 @@ Repository = "https://github.com/lum3on/comfyui_HiDream-Sampler"
 
 [tool.comfy]
 
-PublisherId = "lum3on"
 DisplayName = "comfyui_HiDream-Sampler"
 Icon = "hhttps://avatars.githubusercontent.com/u/197819028?v=4"
+PublisherId = "lum3on"
