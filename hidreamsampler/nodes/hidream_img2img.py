@@ -14,12 +14,12 @@ from PIL import Image
 import gc
 import comfy.utils
 
-from .hidream_sampler import HiDreamSampler
+from .hidream_base import HiDreamBase
 
 
-class HiDreamImg2Img:
-    _model_cache = HiDreamSampler._model_cache
-    cleanup_models = HiDreamSampler.cleanup_models
+class HiDreamImg2Img(HiDreamBase):
+    _model_cache = HiDreamBase._model_cache
+    cleanup_models = HiDreamBase.cleanup_models
 
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)

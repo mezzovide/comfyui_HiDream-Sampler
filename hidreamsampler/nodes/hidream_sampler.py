@@ -15,45 +15,17 @@ import gc
 import comfy.utils
 
 
-# --- ComfyUI Node Definition ---
-class HiDreamSampler:
-    _model_cache = {}
+from .hidream_base import HiDreamBase
 
+
+# --- ComfyUI Node Definition ---
+class HiDreamSampler(HiDreamBase):
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "generate"
     CATEGORY = "HiDream"
 
-    @classmethod
-    def cleanup_models(cls):
-        """Clean up all cached models - can be called by external memory management"""
-        print("HiDream: Cleaning up all cached models...")
-        keys_to_del = list(cls._model_cache.keys())
-        for key in keys_to_del:
-            print(f"  Removing '{key}'...")
-            try:
-                pipe_to_del, _ = cls._model_cache.pop(key)
-                # More aggressive cleanup - clear all major components
-                if hasattr(pipe_to_del, "transformer"):
-                    pipe_to_del.transformer = None
-                if hasattr(pipe_to_del, "text_encoder_4"):
-                    pipe_to_del.text_encoder_4 = None
-                if hasattr(pipe_to_del, "tokenizer_4"):
-                    pipe_to_del.tokenizer_4 = None
-                if hasattr(pipe_to_del, "scheduler"):
-                    pipe_to_del.scheduler = None
-                del pipe_to_del
-            except Exception as e:
-                print(f"  Error cleaning up {key}: {e}")
-        # Multiple garbage collection passes
-        for _ in range(3):
-            gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            # Force synchronization
-            torch.cuda.synchronize()
-        print("HiDream: Cache cleared")
-        return True
+    cleanup_models = HiDreamBase.cleanup_models
 
     @staticmethod
     def parse_aspect_ratio(aspect_ratio_str):
@@ -154,7 +126,6 @@ class HiDreamSampler:
             height, width = parse_resolution(resolution)
             print(f"Using fixed resolution: {width}x{height} ({resolution})")
 
-        # Monitor initial memory usage
         if torch.cuda.is_available():
             initial_mem = torch.cuda.memory_allocated() / 1024**2
             print(f"HiDream: Initial VRAM usage: {initial_mem:.2f} MB")
@@ -162,59 +133,12 @@ class HiDreamSampler:
             print("HiDream Error: No models loaded.")
             return (torch.zeros((1, 512, 512, 3)),)
 
-        pipe = None
-        config = None
         cache_key = f"{model_type}"
-
-        # --- Model Loading / Caching ---
-        if cache_key in self._model_cache:
-            print(f"Checking cache for {cache_key}...")
-            pipe, config = self._model_cache[cache_key]
-            valid_cache = True
-            if (
-                pipe is None
-                or config is None
-                or not hasattr(pipe, "transformer")
-                or pipe.transformer is None
-            ):
-                valid_cache = False
-                print("Invalid cache, reloading...")
-                del self._model_cache[cache_key]
-                pipe, config = None, None
-            if valid_cache:
-                print("Using cached model.")
+        pipe, config = self.get_model_from_cache(cache_key, self._model_cache)
 
         if pipe is None:
-            if self._model_cache:
-                print(f"Clearing ALL cache before loading {model_type}...")
-                keys_to_del = list(self._model_cache.keys())
-                for key in keys_to_del:
-                    print(f"  Removing '{key}'...")
-                    try:
-                        pipe_to_del, _ = self._model_cache.pop(key)
-                        if hasattr(pipe_to_del, "transformer"):
-                            pipe_to_del.transformer = None
-                        if hasattr(pipe_to_del, "text_encoder_4"):
-                            pipe_to_del.text_encoder_4 = None
-                        if hasattr(pipe_to_del, "tokenizer_4"):
-                            pipe_to_del.tokenizer_4 = None
-                        if hasattr(pipe_to_del, "scheduler"):
-                            pipe_to_del.scheduler = None
-                        del pipe_to_del
-                    except Exception as e:
-                        print(f"  Error removing {key}: {e}")
-
-                    # Multiple garbage collection passes
-                    for _ in range(3):
-                        gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                        # Force synchronization
-                        torch.cuda.synchronize()
-                    print("Cache cleared.")
-
+            self.clear_model_cache(self._model_cache)
             print(f"Loading model for {model_type}...")
-
             try:
                 pipe, config = load_models(model_type, use_uncensored_llm)
                 self._model_cache[cache_key] = (pipe, config)
@@ -232,48 +156,12 @@ class HiDreamSampler:
             print("CRITICAL ERROR: Load failed.")
             return (torch.zeros((1, 512, 512, 3)),)
 
-        # --- Update scheduler if requested ---
         original_scheduler_class = config["scheduler_class"]
         original_shift = config["shift"]
+        self.update_scheduler(
+            pipe, config, scheduler, original_scheduler_class, original_shift
+        )
 
-        if scheduler != "Default for model":
-            print(
-                f"Replacing default scheduler ({original_scheduler_class}) with: {scheduler}"
-            )
-
-            # Create a completely fresh scheduler instance to avoid any parameter leakage
-            if scheduler == "UniPC":
-                new_scheduler = get_scheduler_instance(
-                    "FlowUniPCMultistepScheduler", original_shift
-                )
-                pipe.scheduler = new_scheduler
-            elif scheduler == "Euler":
-                new_scheduler = get_scheduler_instance(
-                    "FlashFlowMatchEulerDiscreteScheduler", original_shift
-                )
-                pipe.scheduler = new_scheduler
-            elif scheduler == "Karras Euler":
-                new_scheduler = get_scheduler_instance(
-                    "FlashFlowMatchEulerDiscreteScheduler", original_shift
-                )
-                if hasattr(new_scheduler, "use_karras_sigmas"):
-                    new_scheduler.use_karras_sigmas = True
-                pipe.scheduler = new_scheduler
-            elif scheduler == "Karras Exponential":
-                new_scheduler = get_scheduler_instance(
-                    "FlashFlowMatchEulerDiscreteScheduler", original_shift
-                )
-                if hasattr(new_scheduler, "use_exponential_sigmas"):
-                    new_scheduler.use_exponential_sigmas = True
-                pipe.scheduler = new_scheduler
-        else:
-            # Ensure we're using the original scheduler as specified in the model config
-            print(f"Using model's default scheduler: {original_scheduler_class}")
-            pipe.scheduler = get_scheduler_instance(
-                original_scheduler_class, original_shift
-            )
-
-        # --- Generation Setup ---
         is_nf4_current = config.get("is_nf4", False)
         num_inference_steps = (
             override_steps if override_steps >= 0 else config["num_inference_steps"]
@@ -282,16 +170,13 @@ class HiDreamSampler:
             override_cfg if override_cfg >= 0.0 else config["guidance_scale"]
         )
 
-        # Create the progress bar
         pbar = comfy.utils.ProgressBar(num_inference_steps)
 
-        # Set default max sequence lengths
         max_length_clip_l = 77
         max_length_openclip = 150
         max_length_t5 = 256
         max_length_llama = 256
 
-        # Set default encoder weights
         clip_l_weight = 1.0
         openclip_weight = 1.0
         t5_weight = 1.0
@@ -314,7 +199,6 @@ class HiDreamSampler:
             f"Using standard sequence lengths: CLIP-L: {max_length_clip_l}, OpenCLIP: {max_length_openclip}, T5: {max_length_t5}, Llama: {max_length_llama}"
         )
 
-        # --- Run Inference ---
         pipeline_output = None
         try:
             if not is_nf4_current:
@@ -324,14 +208,11 @@ class HiDreamSampler:
                 print(f"Skipping pipe.to({inference_device}) (CPU offload enabled).")
             print("Executing pipeline inference...")
 
-            # Ensure batch size consistency for multiple images
             if num_images > 1:
                 print(f"Preparing for batch generation with {num_images} images...")
-                # Create a list to store outputs
                 output_images_list = []
                 for i in range(num_images):
                     print(f"Generating image {i + 1}/{num_images}...")
-                    # Generate one image at a time to avoid batch size issues
                     with torch.inference_mode():
                         single_output = pipe(
                             prompt=prompt,
@@ -345,10 +226,10 @@ class HiDreamSampler:
                             width=width,
                             guidance_scale=guidance_scale,
                             num_inference_steps=num_inference_steps,
-                            num_images_per_prompt=1,  # Force single image per call
+                            num_images_per_prompt=1,
                             generator=torch.Generator(
                                 device=inference_device
-                            ).manual_seed(seed + i),  # Increment seed for variety
+                            ).manual_seed(seed + i),
                             max_sequence_length_clip_l=max_length_clip_l,
                             max_sequence_length_openclip=max_length_openclip,
                             max_sequence_length_t5=max_length_t5,
@@ -396,10 +277,10 @@ class HiDreamSampler:
             traceback.print_exc()
             return (torch.zeros((1, height, width, 3)),)
         finally:
-            pbar.update_absolute(num_inference_steps)  # Update pbar regardless
+            pbar.update_absolute(num_inference_steps)
         print("--- Generation Complete ---")
 
-        # Robust output handling
+        # Use base class output processing for the first image (batching can be improved in future)
         if (
             output_images_list is None
             or not isinstance(output_images_list, list)
@@ -410,20 +291,18 @@ class HiDreamSampler:
             )
             return (torch.zeros((1, height, width, 3)),)
 
+        # For batch, stack tensors
         try:
             print(f"Processing {len(output_images_list)} output image(s).")
             tensor_list = []
-
             for i, img in enumerate(output_images_list):
                 if not isinstance(img, Image.Image):
                     print(
                         f"WARNING: Item {i} in output list is not a PIL Image (Type: {type(img)}). Skipping."
                     )
                     continue
-
                 print(f"Converting image {i + 1}/{len(output_images_list)}...")
-                single_tensor = pil2tensor(img)  # This returns shape [1, H, W, C]
-
+                single_tensor = pil2tensor(img)
                 if single_tensor is not None:
                     if len(single_tensor.shape) == 4 and single_tensor.shape[0] == 1:
                         tensor_list.append(single_tensor)
@@ -433,22 +312,18 @@ class HiDreamSampler:
                         )
                 else:
                     print(f"WARNING: pil2tensor failed for image {i}. Skipping.")
-
             if not tensor_list:
                 print("ERROR: All image conversions failed. Creating blank image.")
                 return (torch.zeros((1, height, width, 3)),)
-
             output_tensor = torch.cat(tensor_list, dim=0)
             print(
                 f"Successfully converted {output_tensor.shape[0]} images into batch tensor."
             )
-
             if output_tensor.dtype != torch.float32:
                 print(
                     f"Converting batched {output_tensor.dtype} tensor to float32 for ComfyUI compatibility"
                 )
                 output_tensor = output_tensor.to(torch.float32)
-
             if (
                 len(output_tensor.shape) != 4
                 or output_tensor.shape[0] == 0
@@ -458,9 +333,7 @@ class HiDreamSampler:
                     f"ERROR: Invalid final batch tensor shape {output_tensor.shape}. Creating blank image."
                 )
                 return (torch.zeros((1, height, width, 3)),)
-
             print(f"Output tensor shape: {output_tensor.shape}")
-
             try:
                 import comfy.model_management as model_management
 
@@ -468,15 +341,12 @@ class HiDreamSampler:
                 model_management.soft_empty_cache()
             except Exception as e:
                 print(f"HiDream: ComfyUI cleanup failed: {e}")
-
             if torch.cuda.is_available():
                 final_mem = torch.cuda.memory_allocated() / 1024**2
                 print(
                     f"HiDream: Final VRAM usage: {final_mem:.2f} MB (Change: {final_mem - initial_mem:.2f} MB)"
                 )
-
             return (output_tensor,)
-
         except Exception as e:
             print(f"Error processing output image: {e}")
             import traceback
